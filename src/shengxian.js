@@ -61,6 +61,9 @@ export function client(sx) {
   }
 
   const wait = ms => new Promise(r => setTimeout(r, ms));
+  const LIST = 'fm.lizhi.msking.content.idl.synthesis.service.SynthesisVoiceIdlService/listSynthesisWork';
+  // one song at a time, and each job claims only the work it created (overlapping jobs used to swap results)
+  let queue = Promise.resolve();
   return {
     async points() {
       const d = await call('fm.lizhi.msking.vip.idl.points.service.UserPointsIdlService/getUserPointsBalance', {});
@@ -72,12 +75,18 @@ export function client(sx) {
       return (d.characters || []).map(c => ({ name: c.name, characterId: String(c.characterId), timbreId: String(c.defaultTimbre?.timbreId || ''), cloned: c.sourceType === 'CLONE' }));
     },
     /** The song (m4a bytes) sung in `voice`; resolves to the finished mp3 bytes. Usually a minute or two. */
-    async cover(audio, seconds, name, voice) {
+    cover(audio, seconds, name, voice) {
+      const job = queue.then(() => this.coverNow(audio, seconds, name, voice));
+      queue = job.catch(() => {});
+      return job;
+    },
+    async coverNow(audio, seconds, name, voice) {
       if (!voice?.characterId || !voice?.timbreId) throw new Error('还没选音色：在 config 里填 shengxian.voice（npm run config 会列出来）');
       const plan = await call('fm.lizhi.msking.vip.idl.points.service.UserPointsIdlService/getPointsExpendPlan', { request: { requiredPoints: COST } });
       if (!plan.enough) throw new Error(`声线积分不够了（剩 ${plan.currentPoints}，一首要 ${COST}）`);
       const audioUrl = await upload(audio);
-      const started = Date.now() - 5000;
+      // what is already there, so the new work is told apart by its id (using the app by hand adds works too)
+      const before = new Set(((await call(LIST, { request: { performanceId: '' } })).works || []).map(w => String(w.id)));
       await call('fm.lizhi.msking.content.idl.music.service.SongFactoryIdlService/submitTaskV2', { request: {
         aiTag: false, audioDuration: Math.max(1, Math.round(seconds)), sourceType: 2, audioUrl, characterType: 'USER', confirmedDuplicate: false,
         subtitleStyle: 'keep_original', format: 0, taskType: 0, name: String(name || '翻唱').slice(0, 40), materialEntryType: 2,
@@ -85,8 +94,8 @@ export function client(sx) {
       } });
       for (let i = 0; i < 90; i++) {
         await wait(i < 3 ? 5000 : 8000);
-        const list = await call('fm.lizhi.msking.content.idl.synthesis.service.SynthesisVoiceIdlService/listSynthesisWork', { request: { performanceId: '' } }).catch(() => null);
-        const work = list?.works?.find(w => w.createTime >= started);
+        const list = await call(LIST, { request: { performanceId: '' } }).catch(() => null);
+        const work = (list?.works || []).filter(w => !before.has(String(w.id))).sort((a, b) => a.createTime - b.createTime)[0];
         if (!work) continue;
         if (work.failReason) throw new Error(`声线没做成：${work.failReason}`);
         if (work.mediaUrl && Number(work.status) === 0) {
