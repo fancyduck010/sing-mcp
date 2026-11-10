@@ -4,6 +4,7 @@
 //   npm run config -- path/to/capture.har            → writes config.json, lists voices
 //   npm run config -- path/to/capture.har 小机         → also chooses the voice named 小机
 // The HAR holds your login: keep it (and config.json) to yourself, delete the HAR when done.
+import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { CONFIG_PATH, load, save } from '../src/config.js';
 import { client } from '../src/shengxian.js';
@@ -21,6 +22,8 @@ const headers = Object.fromEntries(req.headers.filter(h => !DROP.has(h.name.toLo
 
 const c = load();
 c.shengxian = { ...c.shengxian, headers };
+// a password for the web address (npm run serve), made once
+c.serve = { port: 8790, publicUrl: '', ...c.serve, key: c.serve?.key || randomBytes(18).toString('base64url') };
 const voices = await client(c.shengxian).voices();
 if (voiceName) {
   const v = voices.find(x => x.name === voiceName);
@@ -32,3 +35,6 @@ console.log(`写好了：${CONFIG_PATH}\n\n你的音色：`);
 for (const v of voices) console.log(`  ${c.shengxian.voice?.characterId === v.characterId ? '★' : ' '} ${v.name}${v.cloned ? '（克隆）' : ''}`);
 console.log(c.shengxian.voice ? '\n★ 是翻唱要用的音色。' : '\n还没选音色：再运行一次，在最后加上音色名字。');
 console.log(`积分：${await client(c.shengxian).points()}`);
+console.log(`
+网址模式（给 Aru 这类手机 App）的密码：${c.serve.key}
+（也存在 config.json 的 serve.key 里）`);
